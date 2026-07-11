@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 
-def analyser_fichier(chemin_ou_flux_excel):
+def analyser_fichier(chemin_ou_flux_excel, col_article_override=None, col_flux_override=None):
     """
     Moteur algorithmique de diagnostic logistique.
     Détecte automatiquement l'en-tête, mappe les colonnes opérationnelles
@@ -35,26 +35,33 @@ def analyser_fichier(chemin_ou_flux_excel):
     
     df_propre = df.copy()
     
-    # Mots-clés pour exclure strictement toutes les colonnes liées aux prix ou montants
-    mots_prix = ["prix", "montant", "valeur", "unitaire", "cout", "coût", "mnt", "ttc", "ht", "price", "amount", "devise", "total ht"]
-    df_propre = df_propre.loc[:, ~df_propre.columns.str.lower().str.contains('|'.join(mots_prix))]
-    
     # 2. Mappage intelligent et élargi des colonnes
     dictionnaire_colonnes = {
-        "Date": ["date", "date mouvement", "dates", "jour", "période", "créé le", "le", "timestamp", "annee", "mois"],
-        "Article": ["article", "code article", "ref", "reference", "référence", "id", "code_art", "code", "matériel", "sku", "art", "no_article"],
-        "Designation": ["designation", "désignation", "libelle", "nom", "produit", "item", "description", "libellé", "nom produit"],
-        "Magasin": ["magasin", "depot", "dépôt", "emplacement", "site", "zone", "entrepot", "entrepôt", "whse", "loc", "localisation"],
-        "Flux": ["flux", "mouvement", "type flux", "sens", "quantite", "quantité", "volume", "qty", "qte", "qté", "solde", "nombre", "mvt", "quantités", "stk", "stock"]
+        "Date": ["date", "date mouvement", "dates", "jour", "période", "créé le", "le", "timestamp", "annee", "mois", "dt"],
+        "Article": ["article", "code article", "ref", "reference", "référence", "id", "code_art", "code", "matériel", "sku", "art", "no_article", "item", "item_code", "produit", "code produit", "designation_code"],
+        "Designation": ["designation", "désignation", "libelle", "nom", "produit", "item", "description", "libellé", "nom produit", "libelle article", "nom article"],
+        "Magasin": ["magasin", "depot", "dépôt", "emplacement", "site", "zone", "entrepot", "entrepôt", "whse", "loc", "localisation", "stock_loc"],
+        "Flux": ["flux", "mouvement", "type flux", "sens", "quantite", "quantité", "volume", "qty", "qte", "qté", "solde", "nombre", "mvt", "quantités", "stk", "stock", "entree", "sortie", "unite", "unités", "qte_mvt", "nb"]
     }
     
     colonnes_trouvees = {}
+    
+    # Priorité 1 : Recherche par correspondance
     for cle, variantes in dictionnaire_colonnes.items():
         for col_reel in df_propre.columns:
-            # Match exact ou inclusion du mot-clé
-            if col_reel.lower() in variantes or any(v == col_reel.lower() for v in variantes) or any(v in col_reel.lower() for v in variantes):
-                colonnes_trouvees[cle] = col_reel
-                break
+            col_lower = str(col_reel).lower().strip()
+            # Test exact ou inclusion
+            if col_lower in variantes or any(v == col_lower for v in variantes) or any(v in col_lower for v in variantes):
+                # Éviter de prendre une colonne de prix si ce n'est pas le seul choix
+                if not any(p in col_lower for p in ["prix", "montant", "cout", "coût", "ttc", "ht", "valeur"]):
+                    colonnes_trouvees[cle] = col_reel
+                    break
+
+    # Remplacement manuel si sélectionné dans l'interface
+    if col_article_override and col_article_override in df_propre.columns:
+        colonnes_trouvees["Article"] = col_article_override
+    if col_flux_override and col_flux_override in df_propre.columns:
+        colonnes_trouvees["Flux"] = col_flux_override
 
     # 3. Moteur de Détection des Alertes Logistiques
     alertes = {
@@ -70,7 +77,7 @@ def analyser_fichier(chemin_ou_flux_excel):
     col_des = colonnes_trouvees.get("Designation", col_art)
     
     if col_art and col_flux and col_art in df_propre.columns and col_flux in df_propre.columns:
-        # Forcer la conversion de la colonne flux/quantité en numérique
+        # Conversion forcée en numérique
         df_propre[col_flux] = pd.to_numeric(df_propre[col_flux], errors='coerce').fillna(0)
         
         # Analyse du comportement historique par article
@@ -171,4 +178,3 @@ def analyser_fichier(chemin_ou_flux_excel):
     }
     
     return resultats_json, df_propre
-   
