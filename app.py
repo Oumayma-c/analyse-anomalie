@@ -1,7 +1,7 @@
+# -*- coding: utf-8 -*-
 import streamlit as st
 import pandas as pd
-import logique_stock as ls  # Importation de ton module logique
-import os
+import logique_stock as ls
 
 # Configuration du site web
 st.set_page_config(page_title="Dashboard Stocks CMG", layout="wide")
@@ -19,26 +19,27 @@ fichier_uploade = st.file_uploader(
 )
 
 if fichier_uploade is not None:
-    # Fichier tampon dans le dossier courant pour éviter les conflits de droits Windows
     nom_fichier_temporaire = "temp_analyse_stock.xlsx"
     
     try:
-        # Écriture du fichier sur le disque (écrase l'ancien s'il existe)
+        # Écriture du fichier tampon
         with open(nom_fichier_temporaire, "wb") as f:
             f.write(fichier_uploade.getvalue())
 
-        # Appel de ton module personnalisé
+        # Appel du module métier
         resultats_json, df_propre, anomalies_df = ls.analyser_fichier(nom_fichier_temporaire)
         
-        # --- NOTE : On ne supprime pas le fichier ici pour éviter le WinError 32 de Windows ---
-        
-        # Récupération des indicateurs calculés dynamiquement
         kpis = resultats_json["indicateurs"]["kpis"]
         repart_flux = pd.DataFrame(resultats_json["indicateurs"]["repartition_flux"])
         categories = pd.DataFrame(resultats_json["indicateurs"]["categories_couteuses"])
         anomalies = resultats_json["anomalies"]
 
-        # 1. Affichage des KPIs Généraux du fichier chargé
+        # Avertissements éventuels
+        if resultats_json.get("avertissements"):
+            for av in resultats_json["avertissements"]:
+                st.warning(f"⚠️ {av}")
+
+        # 1. Affichage des KPIs Généraux
         st.success("✅ Analyse reussie ! Voici les indicateurs generaux du fichier importé :")
         col1, col2, col3 = st.columns(3)
         col1.metric("📦 Nombre total de mouvements", f"{kpis['nb_mouvements']:,}")
@@ -56,7 +57,7 @@ if fichier_uploade is not None:
 
         with onglet1:
             st.subheader("Repartition des Mouvements par Type de Flux (Poids Relatif)")
-            st.write("Analyse des volumes de transactions (Entrees, Sorties, Ajustements) enregistres dans ce fichier.")
+            st.write("Analyse des volumes de transactions enregistres dans ce fichier.")
             
             if not repart_flux.empty:
                 repart_flux["pourcentage"] = (repart_flux["nb"] / repart_flux["nb"].sum()) * 100
@@ -71,10 +72,12 @@ if fichier_uploade is not None:
             
             if not categories.empty:
                 total_val_cat = categories["valeur"].sum()
-                categories["Part_Relative_Pourcent"] = (categories["valeur"] / total_val_cat) * 100
-                
-                col_cat = "Catégorie" if "Catégorie" in categories.columns else "Categorie"
-                st.bar_chart(data=categories.head(5), x=col_cat, y="Part_Relative_Pourcent", color="#FF4B4B")
+                if total_val_cat > 0:
+                    categories["Part_Relative_Pourcent"] = (categories["valeur"] / total_val_cat) * 100
+                    col_cat = "Catégorie" if "Catégorie" in categories.columns else "Categorie"
+                    st.bar_chart(data=categories.head(5), x=col_cat, y="Part_Relative_Pourcent", color="#FF4B4B")
+                else:
+                    st.info("Les montants financiers sont à 0 ou non renseignés dans ce fichier.")
             else:
                 st.info("Aucune donnee de montant trouvee pour classer les categories.")
 
@@ -82,7 +85,6 @@ if fichier_uploade is not None:
             st.subheader("Detection Automatique des Dysfonctionnements de Stock")
             st.write("Regles metier appliquees pour identifier les risques d'exploitation.")
             
-            # Affichage dynamique des alertes selon le contenu du fichier
             aucun_incident = True
             for cle_anomalie, data in anomalies.items():
                 if data["nb"] > 0:
