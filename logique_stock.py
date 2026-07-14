@@ -3,12 +3,9 @@
 Module de logique métier : lecture du fichier de mouvements de stock,
 calcul des indicateurs de pilotage et détection des anomalies.
 
-Conçu pour le format réel transmis par le service (export ERP à plat, une ligne par
-mouvement, colonne "Type de flux de mouvement" identifiant Sorties/Entrées/
-Transfères/Ajustement) — ex. fichier "Mvts_02_2026.xlsx".
-
-Ce module ne dépend d'aucun framework web : il est importé tel quel par le backend
-Flask (app.py) et peut aussi être utilisé en ligne de commande / notebook.
+Conçu pour être universel :
+1. Détecte si le fichier contient des onglets séparés de mouvements (Entrées, Sorties, Ajustements, Transferts) et les fusionne.
+2. Sinon, scanne intelligemment tous les onglets du fichier pour trouver celui qui contient les colonnes nécessaires (Article et Quantité), évitant les onglets vides ou d'introduction.
 """
 
 import re
@@ -20,8 +17,7 @@ import pandas as pd
 
 
 # ============================================================================
-# Détection souple des colonnes (au cas où les libellés varient légèrement
-# d'un mois à l'autre dans l'export ERP)
+# Détection et Normalisation des Textes
 # ============================================================================
 
 def _normaliser(texte):
@@ -31,21 +27,19 @@ def _normaliser(texte):
 
 
 CANDIDATS_COLONNES = {
-    "date": ["date du mouvement", "datem", "date mouvement"],
-    "article": ["article"],
-    "designation": ["version", "designation", "libelle"],
-    "categorie": ["descr_section", "categorie", "section"],
-    "quantite": ["qte", "quantite"],
-    "pmp": ["pmp"],
-    "montant": ["mnt", "montant", "valeur du mouvement"],
-    "magasin": ["magasin"],
-    "type_flux": ["type de flux de mouvement", "type de flux"],
+    "date": ["date", "date du mouvement", "datem", "date mouvement", "date_mvt", "date mvt"],
+    "article": ["article", "code", "code article", "ref", "reference", "item", "code_article"],
+    "designation": ["version", "designation", "libelle", "nom", "description", "libelle article", "des_article"],
+    "categorie": ["descr_section", "categorie", "section", "famille", "groupe", "description_categorie"],
+    "quantite": ["qte", "quantite", "quantites", "qty", "qté", "nombre", "volume"],
+    "pmp": ["pmp", "prix moyen", "prix unitaire", "pu", "paf"],
+    "montant": ["mnt", "montant", "valeur du mouvement", "valeur", "total", "montant total", "valeur mvt"],
+    "magasin": ["magasin", "depot", "emplacement", "site", "stock", "mag"],
+    "type_flux": ["type de flux de mouvement", "type de flux", "type flux", "flux", "mouvement", "type_mvt", "sens", "type"],
     "type_detail": ["type"],
-    "origine": ["type d'origine du mouvement", "origine du mouvement", "reference"],
+    "origine": ["type d'origine du mouvement", "origine du mouvement", "reference", "origine"],
 }
 
-# Colonnes à exclure des correspondances "partielles" trop larges (ex: "Type" seul
-# ne doit pas capter "Type de flux de mouvement" ni "Type d'origine du mouvement").
 COLONNES_EXACTES_UNIQUEMENT = {"type_detail"}
 
 
@@ -70,22 +64,6 @@ def detecter_mapping(colonnes):
             colonnes, candidats, exact_only=(champ in COLONNES_EXACTES_UNIQUEMENT)
         )
     return mapping
-
-
-def choisir_feuille(chemin_fichier):
-    """Choisit, parmi les feuilles du classeur, celle qui contient une colonne de
-    type de flux de mouvement (la feuille de données ; les autres feuilles éventuelles
-    — sommaires, feuilles vides — sont ignorées)."""
-    xl = pd.ExcelFile(chemin_fichier)
-    for nom in xl.sheet_names:
-        entete = pd.read_excel(chemin_fichier, sheet_name=nom, nrows=0).columns
-        mapping = detecter_mapping(entete)
-        if mapping["type_flux"] and mapping["article"] and mapping["quantite"]:
-            return nom, mapping
-    raise ValueError(
-        "Aucune feuille du classeur ne contient les colonnes attendues "
-        "(Article, Qté, Type de flux de mouvement, ...)."
-    )
 
 
 # ============================================================================
@@ -115,61 +93,116 @@ def parser_date_erp(valeur):
 
 
 # ============================================================================
-# Chargement et normalisation
+# Chargement intelligent multi-onglets & mono-onglet universel
 # ============================================================================
 
 def charger_mouvements(chemin_fichier):
-    """Charge le classeur, détecte la feuille et les colonnes pertinentes, et retourne
-    un DataFrame normalisé (schéma stable quel que soit le fichier source) ainsi que
-    la liste des avertissements rencontrés."""
     avertissements = []
-    nom_feuille, mapping = choisir_feuille(chemin_fichier)
-    df = pd.read_excel(chemin_fichier, sheet_name=nom_feuille)
-    df.columns = [str(c).strip() for c in df.columns]
-    # re-détecter sur les colonnes réelles (au cas où les strip changent la correspondance)
-    mapping = detecter_mapping(df.columns)
+    xl = pd.ExcelFile(chemin_fichier)
+    toutes_feuilles = xl.sheet_names
 
-    manquants_requis = [c for c in ("article", "quantite", "type_flux") if not mapping[c]]
-    if manquants_requis:
-        raise ValueError(f"Colonnes requises introuvables : {manquants_requis}")
+    # Définition des mots-clés pour repérer les feuilles de mouvements réels séparées
+    mappage_feuilles = {
+        "entree": "Entrées",
+        "sortie": "Sorties",
+        "ajust": "Ajustement",
+        "transf": "Transferts"
+    }
 
-    d = pd.DataFrame()
-    d["Article"] = df[mapping["article"]].astype(str).str.strip()
-    d["Désignation"] = df[mapping["designation"]].astype(str).str.strip() if mapping["designation"] else ""
-    d["Catégorie"] = df[mapping["categorie"]].astype(str).str.strip() if mapping["categorie"] else "(non classé)"
-    d["Qté"] = pd.to_numeric(df[mapping["quantite"]], errors="coerce").fillna(0.0)
-    d["PMP"] = pd.to_numeric(df[mapping["pmp"]], errors="coerce") if mapping["pmp"] else np.nan
-    d["Montant"] = pd.to_numeric(df[mapping["montant"]], errors="coerce").fillna(0.0) if mapping["montant"] else 0.0
-    d["Magasin"] = df[mapping["magasin"]].astype(str).str.strip().replace("nan", "(sans magasin)") if mapping["magasin"] else "(sans magasin)"
-    d["Magasin"] = d["Magasin"].replace("", "(sans magasin)")
-    d["TypeFlux"] = df[mapping["type_flux"]].astype(str).str.strip()
-    d["NatureConso"] = df[mapping["type_detail"]].astype(str).str.strip() if mapping["type_detail"] else ""
-    d["DateM"] = df[mapping["date"]].apply(parser_date_erp) if mapping["date"] else pd.NaT
+    dfs_a_combiner = []
+    onglets_mouvements_trouves = False
 
-    # normalisation des libellés de flux (ex: "Transfères"/"Transferts" -> "Transferts")
-    def _norm_flux(v):
-        n = _normaliser(v)
-        if "sortie" in n:
-            return "Sorties"
-        if "entr" in n:
-            return "Entrées"
-        if "transf" in n:
-            return "Transferts"
-        if "ajust" in n:
-            return "Ajustement"
-        return v or "(non défini)"
+    # 1. Tenter de chercher si le fichier contient des onglets séparés (Entrées, Sorties, etc.)
+    for nom_f in toutes_feuilles:
+        nom_normalise = _normaliser(nom_f)
+        type_flux_detecte = None
+        for cle, label in mappage_feuilles.items():
+            if cle in nom_normalise:
+                type_flux_detecte = label
+                break
+        
+        if type_flux_detecte:
+            df_temp = pd.read_excel(chemin_fichier, sheet_name=nom_f)
+            df_temp.columns = [str(c).strip() for c in df_temp.columns]
+            mapping = detecter_mapping(df_temp.columns)
 
-    d["TypeFlux"] = d["TypeFlux"].apply(_norm_flux)
-    d["AbsQte"] = d["Qté"].abs()
-    d = d.dropna(subset=["Article"])
-    d = d[d["Article"].str.len() > 0].reset_index(drop=True)
+            if mapping["article"] and mapping["quantite"]:
+                onglets_mouvements_trouves = True
+                d_sub = pd.DataFrame()
+                d_sub["Article"] = df_temp[mapping["article"]].astype(str).str.strip()
+                d_sub["Désignation"] = df_temp[mapping["designation"]].astype(str).str.strip() if mapping["designation"] else ""
+                d_sub["Catégorie"] = df_temp[mapping["categorie"]].astype(str).str.strip() if mapping["categorie"] else "(non classé)"
+                
+                qtes_brutes = pd.to_numeric(df_temp[mapping["quantite"]], errors="coerce").fillna(0.0)
+                if type_flux_detecte == "Sorties":
+                    d_sub["Qté"] = -qtes_brutes.abs()
+                else:
+                    d_sub["Qté"] = qtes_brutes.abs()
 
-    if d["DateM"].isna().all():
+                d_sub["PMP"] = pd.to_numeric(df_temp[mapping["pmp"]], errors="coerce") if mapping["pmp"] else np.nan
+                d_sub["Montant"] = pd.to_numeric(df_temp[mapping["montant"]], errors="coerce").fillna(0.0) if mapping["montant"] else 0.0
+                d_sub["Magasin"] = df_temp[mapping["magasin"]].astype(str).str.strip().replace("nan", "(sans magasin)") if mapping["magasin"] else "(sans magasin)"
+                d_sub["Magasin"] = d_sub["Magasin"].replace("", "(sans magasin)")
+                
+                d_sub["TypeFlux"] = type_flux_detecte
+                d_sub["NatureConso"] = df_temp[mapping["type_detail"]].astype(str).str.strip() if mapping["type_detail"] else ""
+                d_sub["DateM"] = df_temp[mapping["date"]].apply(parser_date_erp) if mapping["date"] else pd.NaT
+                d_sub["AbsQte"] = d_sub["Qté"].abs()
+
+                dfs_a_combiner.append(d_sub)
+
+    # 2. Si aucun onglet de mouvement spécifique n'a été trouvé, on scanne TOUS les onglets
+    #    pour trouver le premier onglet valide contenant "Article" et "Quantité".
+    if not onglets_mouvements_trouves:
+        feuille_trouvee = None
+        mapping_trouve = None
+        
+        for nom_f in toutes_feuilles:
+            try:
+                # Lecture des premières lignes pour inspecter les colonnes
+                df_test = pd.read_excel(chemin_fichier, sheet_name=nom_f, nrows=5)
+                df_test.columns = [str(c).strip() for c in df_test.columns]
+                m = detecter_mapping(df_test.columns)
+                if m["article"] and m["quantite"]:
+                    feuille_trouvee = nom_f
+                    mapping_trouve = m
+                    break
+            except Exception:
+                continue
+
+        if feuille_trouvee is None:
+            raise ValueError(
+                "Aucun onglet contenant les colonnes requises (Article et Quantité) n'a été trouvé dans ce fichier."
+            )
+
+        # Charger les données de la feuille identifiée
+        df_temp = pd.read_excel(chemin_fichier, sheet_name=feuille_trouvee)
+        df_temp.columns = [str(c).strip() for c in df_temp.columns]
+        mapping = mapping_trouve
+
+        df_final = pd.DataFrame()
+        df_final["Article"] = df_temp[mapping["article"]].astype(str).str.strip()
+        df_final["Désignation"] = df_temp[mapping["designation"]].astype(str).str.strip() if mapping["designation"] else ""
+        df_final["Catégorie"] = df_temp[mapping["categorie"]].astype(str).str.strip() if mapping["categorie"] else "(non classé)"
+        df_final["Qté"] = pd.to_numeric(df_temp[mapping["quantite"]], errors="coerce").fillna(0.0)
+        df_final["PMP"] = pd.to_numeric(df_temp[mapping["pmp"]], errors="coerce") if mapping["pmp"] else np.nan
+        df_final["Montant"] = pd.to_numeric(df_temp[mapping["montant"]], errors="coerce").fillna(0.0) if mapping["montant"] else 0.0
+        df_final["Magasin"] = df_temp[mapping["magasin"]].astype(str).str.strip().replace("nan", "(sans magasin)") if mapping["magasin"] else "(sans magasin)"
+        df_final["Magasin"] = df_final["Magasin"].replace("", "(sans magasin)")
+        df_final["TypeFlux"] = df_temp[mapping["type_flux"]].astype(str).str.strip() if mapping["type_flux"] else "Mouvement"
+        df_final["NatureConso"] = df_temp[mapping["type_detail"]].astype(str).str.strip() if mapping["type_detail"] else ""
+        df_final["DateM"] = df_temp[mapping["date"]].apply(parser_date_erp) if mapping["date"] else pd.NaT
+        df_final["AbsQte"] = df_final["Qté"].abs()
+    else:
+        df_final = pd.concat(dfs_a_combiner, ignore_index=True)
+
+    df_final = df_final.dropna(subset=["Article"])
+    df_final = df_final[df_final["Article"].str.len() > 0].reset_index(drop=True)
+
+    if df_final["DateM"].isna().all():
         avertissements.append("Aucune date de mouvement exploitable : la tendance temporelle ne peut pas être calculée.")
-    if mapping["montant"] is None:
-        avertissements.append("Colonne de montant non trouvée : les indicateurs de valeur seront à 0.")
 
-    return d, avertissements
+    return df_final, avertissements
 
 
 # ============================================================================
@@ -194,34 +227,45 @@ def repartition_par_type_flux(df):
 
 
 def activite_par_magasin(df):
-    g = df.groupby("Magasin").agg(nb=("Magasin", "count"), valeur=("Montant", lambda x: float(x.abs().sum())))
+    df_temp = df.copy()
+    df_temp["AbsMontant"] = df_temp["Montant"].abs()
+    g = df_temp.groupby("Magasin").agg(
+        nb=("Magasin", "count"), 
+        valeur=("AbsMontant", "sum")
+    )
     g = g.sort_values("nb", ascending=False).reset_index()
     return g.to_dict("records")
 
 
 def top_articles_quantite(df, n=10):
-    sorties = df[df["TypeFlux"] == "Sorties"]
-    g = (sorties.groupby(["Article", "Désignation"])["Qté"].apply(lambda x: float(x.abs().sum()))
+    sorties = df[df["TypeFlux"] == "Sorties"].copy()
+    if sorties.empty:
+        sorties = df.copy()
+    sorties["AbsQte"] = sorties["Qté"].abs()
+    g = (sorties.groupby(["Article", "Désignation"])["AbsQte"].sum()
          .reset_index(name="qte").sort_values("qte", ascending=False).head(n))
     return g.to_dict("records")
 
 
 def top_articles_valeur(df, n=10):
-    sorties = df[df["TypeFlux"] == "Sorties"]
-    g = (sorties.groupby(["Article", "Désignation"])["Montant"].apply(lambda x: float(x.abs().sum()))
+    sorties = df[df["TypeFlux"] == "Sorties"].copy()
+    if sorties.empty:
+        sorties = df.copy()
+    sorties["AbsMontant"] = sorties["Montant"].abs()
+    g = (sorties.groupby(["Article", "Désignation"])["AbsMontant"].sum()
          .reset_index(name="valeur").sort_values("valeur", ascending=False).head(n))
     return g.to_dict("records")
 
 
 def categories_plus_couteuses(df, n=10):
-    g = (df.groupby("Catégorie")["Montant"].apply(lambda x: float(x.abs().sum()))
+    df_temp = df.copy()
+    df_temp["AbsMontant"] = df_temp["Montant"].abs()
+    g = (df_temp.groupby("Catégorie")["AbsMontant"].sum()
          .reset_index(name="valeur").sort_values("valeur", ascending=False).head(n))
     return g.to_dict("records")
 
 
 def tendance_mensuelle(df):
-    """Tendance par semaine calendaire (le mot 'mensuelle' du cahier des charges
-    correspond, sur un export d'un seul mois, à un suivi infra-mensuel par semaine)."""
     d = df.dropna(subset=["DateM"]).copy()
     if d.empty:
         return []
@@ -250,17 +294,18 @@ def calculer_indicateurs(df):
 # ============================================================================
 
 def _lignes_dict(df):
-    """Sérialise un sous-ensemble de lignes pour la réponse JSON / l'export."""
     cols = ["DateM", "Article", "Désignation", "Magasin", "TypeFlux", "Qté", "Montant"]
+    # S'assurer que les colonnes existent
+    for c in cols:
+        if c not in df.columns:
+            df[c] = ""
     out = df[cols].copy()
-    out["DateM"] = out["DateM"].apply(lambda d: d.strftime("%d/%m/%Y %H:%M") if pd.notna(d) else "")
+    out["DateM"] = out["DateM"].apply(lambda d: d.strftime("%d/%m/%Y %H:%M") if pd.notna(d) and hasattr(d, "strftime") else "")
     out = out.rename(columns={"DateM": "Date", "TypeFlux": "Flux"})
     return out.round({"Qté": 2, "Montant": 2}).to_dict("records")
 
 
 def calculer_stock_cumule(df):
-    """Stock théorique cumulé par article, base 0 en début de période (aucun stock
-    d'ouverture n'est fourni dans ce fichier)."""
     d = df.sort_values(["Article", "DateM"], na_position="first").copy()
     d["StockCumule"] = d.groupby("Article")["Qté"].cumsum()
     d["StockAvant"] = d["StockCumule"] - d["Qté"]
@@ -272,8 +317,6 @@ def detect_stock_negatif(df_stock):
 
 
 def detect_rupture_stock(df_stock):
-    """Mouvements après lesquels le stock cumulé de l'article retombe exactement à 0
-    (rupture / stock devenu vide), alors qu'il était positif juste avant."""
     return df_stock[(df_stock["StockCumule"] == 0) & (df_stock["StockAvant"] > 0)]
 
 
@@ -284,6 +327,8 @@ def detect_sortie_superieure_stock(df_stock):
 
 def detect_consommation_excessive(df, seuil_z=3.0):
     sorties = df[df["TypeFlux"] == "Sorties"].copy()
+    if sorties.empty:
+        return pd.DataFrame(columns=df.columns)
     stats = sorties.groupby("Article")["AbsQte"].agg(["mean", "std", "count"])
     stats = stats[stats["count"] >= 3]
     sorties = sorties.merge(stats, on="Article", how="inner")
@@ -350,7 +395,6 @@ def calculer_anomalies(df, seuil_z=3.0, seuil_ajust=2):
 
 
 def analyser_fichier(chemin_fichier, seuil_z=3.0, seuil_ajust=2):
-    """Point d'entrée unique utilisé par le backend Flask."""
     df, avertissements = charger_mouvements(chemin_fichier)
     indicateurs = calculer_indicateurs(df)
     anomalies_json, anomalies_df = calculer_anomalies(df, seuil_z, seuil_ajust)
