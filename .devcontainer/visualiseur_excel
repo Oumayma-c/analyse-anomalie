@@ -1,0 +1,41 @@
+import streamlit as st
+import pandas as pd
+
+# Configuration de la page
+st.set_page_config(page_title="Visualisateur Excel Universel", layout="wide")
+
+st.title("📂 Visualisateur Excel Universel")
+st.write("Glissez-déposez n'importe quel fichier Excel pour explorer son contenu instantanément.")
+
+# Zone d'importation
+fichier_uploade = st.file_uploader("Sélectionnez un fichier Excel (.xlsx)", type=["xlsx"])
+
+if fichier_uploade is not None:
+    try:
+        # Lecture des métadonnées du fichier Excel pour obtenir les onglets
+        xl = pd.ExcelFile(fichier_uploade)
+        onglets = xl.sheet_names
+        st.success(f"✅ Fichier chargé avec succès ! Il contient {len(onglets)} onglet(s).")
+
+        # Sélection de l'onglet à afficher si plusieurs existent
+        onglet_selectionne = st.selectbox("Choisissez l'onglet à afficher :", onglets)
+
+        # Chargement des données de l'onglet sélectionné
+        df = pd.read_excel(fichier_uploade, sheet_name=onglet_selectionne)
+
+        # Affichage des KPIs rapides sur la structure de la feuille
+        col1, col2 = st.columns(2)
+        col1.metric("Nombre de lignes", f"{df.shape[0]:,}")
+        col2.metric("Nombre de colonnes", f"{df.shape[1]}")
+
+        st.markdown("---")
+        st.subheader(f"Données de l'onglet : {onglet_selectionne}")
+        
+        # Affichage du tableau de données dynamique
+        st.dataframe(df, use_container_width=True)
+        
+    except Exception as e:
+        st.error(f"❌ Erreur lors de la lecture du fichier : {e}")
+
+else:
+    st.info("En attente d'un fichier Excel pour démarrer la visualisation.")
