@@ -60,7 +60,8 @@ if fichier_uploade is not None:
             
             if not repart_flux.empty:
                 repart_flux["pourcentage"] = (repart_flux["nb"] / repart_flux["nb"].sum()) * 100
-                st.bar_chart(data=repart_flux, x="type", y="pourcentage", color="#4AP0A1")
+                # Utilisation de la couleur valide #4A90A1 au lieu de #4AP0A1
+                st.bar_chart(data=repart_flux, x="type", y="pourcentage", color="#4A90A1")
             
             if kpis['periode_debut'] and kpis['periode_fin']:
                 st.info(f"📅 Periode couverte par ce fichier : du {kpis['periode_debut']} au {kpis['periode_fin']}")
