@@ -6,7 +6,7 @@ import os
 # Configuration du site web
 st.set_page_config(page_title="Dashboard Stocks CMG", layout="wide")
 
-st.title("📊 Systeme d'Analyse Universel des Stocks ")
+st.title("📊 Systeme d'Analyse Universel des Stocks - CMG")
 st.markdown("### *Outil d'aide a la decision par Chargement de Fichier (Anonymise)*")
 st.write("Ce site web utilise ton moteur algorithmique pour nettoyer, analyser et detecter les anomalies de n'importe quel export de mouvements de stock.")
 
@@ -41,17 +41,17 @@ if fichier_uploade is not None:
         # 1. Affichage des KPIs Généraux du fichier chargé
         st.success("✅ Analyse reussie ! Voici les indicateurs generaux du fichier importé :")
         col1, col2, col3 = st.columns(3)
-        col1.metric(" Nombre total de mouvements", f"{kpis['nb_mouvements']:,}")
-        col2.metric("Articles differents mouvementes", f"{kpis['nb_articles']}")
-        col3.metric(" Nombre de magasins actifs", f"{kpis['nb_magasins']}")
+        col1.metric("📦 Nombre total de mouvements", f"{kpis['nb_mouvements']:,}")
+        col2.metric("🔢 Articles differents mouvementes", f"{kpis['nb_articles']}")
+        col3.metric("🏠 Nombre de magasins actifs", f"{kpis['nb_magasins']}")
 
         st.markdown("---")
 
         # 2. Onglets de Navigation
         onglet1, onglet2, onglet3 = st.tabs([
-            " Activite & Volumes de Flux", 
-            " Structure Analytique (Pareto/ABC)", 
-            " Alertes & Anomalies Logistiques"
+            "📈 Activite & Volumes de Flux", 
+            "🔮 Structure Analytique (Pareto/ABC)", 
+            "⚠️ Alertes & Anomalies Logistiques"
         ])
 
         with onglet1:
@@ -97,10 +97,10 @@ if fichier_uploade is not None:
                             st.dataframe(df_ano_visu[colonnes_visu])
             
             if aucun_incident:
-                st.success(" Félicitations ! Aucune anomalie logistique n'a été détectée dans ce fichier.")
+                st.success("🎉 Félicitations ! Aucune anomalie logistique n'a été détectée dans ce fichier.")
 
     except Exception as e:
-        st.error(f" Une erreur s'est produite lors de l'analyse de ce fichier : {e}")
+        st.error(f"❌ Une erreur s'est produite lors de l'analyse de ce fichier : {e}")
 
 else:
     st.info("👋 En attente d'un fichier. Veuillez glisser-deposer un fichier Excel ci-dessus pour lancer l'analyse.")
