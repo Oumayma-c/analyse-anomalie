@@ -1,144 +1,106 @@
 import streamlit as st
 import pandas as pd
-import logique_stock as ls
+import logique_stock as ls  # Importation de ton module logique
+import os
 
-# Configuration globale de la page web
-st.set_page_config(page_title="Suivi de Stock Analytique", layout="wide")
+# Configuration du site web
+st.set_page_config(page_title="Dashboard Stocks CMG", layout="wide")
 
-st.title("🚀 Système de Diagnostic Logistique Universel")
-st.write("Déposez votre fichier Excel de mouvements de stock pour générer automatiquement le rapport.")
+st.title("📊 Systeme d'Analyse Universel des Stocks ")
+st.markdown("### *Outil d'aide a la decision par Chargement de Fichier (Anonymise)*")
+st.write("Ce site web utilise ton moteur algorithmique pour nettoyer, analyser et detecter les anomalies de n'importe quel export de mouvements de stock.")
+
 st.markdown("---")
 
-# Zone de téléchargement du fichier Excel
+# 📥 Zone de téléchargement du fichier Excel
 fichier_uploade = st.file_uploader(
-    label="Glissez-déposez votre tableau Excel ici (.xlsx)", 
+    label="Veuillez glisser-deposer ou selectionner le fichier Excel des mouvements (.xlsx)", 
     type=["xlsx"]
 )
 
 if fichier_uploade is not None:
+    # Fichier tampon dans le dossier courant pour éviter les conflits de droits Windows
+    nom_fichier_temporaire = "temp_analyse_stock.xlsx"
+    
     try:
-        # Première passe : détection automatique
-        resultats, df_propre = ls.analyser_fichier(fichier_uploade)
+        # Écriture du fichier sur le disque (écrase l'ancien s'il existe)
+        with open(nom_fichier_temporaire, "wb") as f:
+            f.write(fichier_uploade.getvalue())
+
+        # Appel de ton module personnalisé
+        resultats_json, df_propre, anomalies_df = ls.analyser_fichier(nom_fichier_temporaire)
         
-        st.success("✅ Fichier traité avec succès !")
+        # --- NOTE : On ne supprime pas le fichier ici pour éviter le WinError 32 de Windows ---
         
-        # 1. Métriques Générales
-        col1, col2 = st.columns(2)
-        col1.metric("📋 Lignes de flux détectées", f"{resultats['metriques']['total_lignes']:,}")
-        col2.metric("🔢 Colonnes analysées", f"{resultats['metriques']['total_colonnes']}")
+        # Récupération des indicateurs calculés dynamiquement
+        kpis = resultats_json["indicateurs"]["kpis"]
+        repart_flux = pd.DataFrame(resultats_json["indicateurs"]["repartition_flux"])
+        categories = pd.DataFrame(resultats_json["indicateurs"]["categories_couteuses"])
+        anomalies = resultats_json["anomalies"]
+
+        # 1. Affichage des KPIs Généraux du fichier chargé
+        st.success("✅ Analyse reussie ! Voici les indicateurs generaux du fichier importé :")
+        col1, col2, col3 = st.columns(3)
+        col1.metric(" Nombre total de mouvements", f"{kpis['nb_mouvements']:,}")
+        col2.metric("Articles differents mouvementes", f"{kpis['nb_articles']}")
+        col3.metric(" Nombre de magasins actifs", f"{kpis['nb_magasins']}")
 
         st.markdown("---")
 
-        # 2. Les 3 Onglets Structurés
+        # 2. Onglets de Navigation
         onglet1, onglet2, onglet3 = st.tabs([
-            "📈 Activités", 
-            "📋 Structure", 
-            "⚠️ Alerte"
+            " Activite & Volumes de Flux", 
+            " Structure Analytique (Pareto/ABC)", 
+            " Alertes & Anomalies Logistiques"
         ])
 
-        # ================= 2. ONGLET STRUCTURE (PLAMBÉ EN PREMIER POUR CONFIGURATION SI BESOIN) =================
-        with onglet2:
-            st.subheader("Structure Analytique & Configuration des Colonnes")
-            
-            cibles = resultats.get("colonnes_cibles", {})
-            
-            st.info("🔍 **Diagnostic de détection automatique des colonnes :**")
-            diag_cols = st.columns(5)
-            types_attendus = ["Date", "Article", "Designation", "Magasin", "Flux"]
-            for idx, t in enumerate(types_attendus):
-                nom_trouve = cibles.get(t)
-                if nom_trouve:
-                    diag_cols[idx].success(f"**{t}** :\n`{nom_trouve}`")
-                else:
-                    diag_cols[idx].error(f"**{t}**\n❌ Non détecté")
-            
-            st.markdown("---")
-            
-            # Mappage manuel de secours si une colonne n'est pas bien reconnue
-            with st.expander("🛠️ Ajuster / Forcer manuellement les colonnes 'Article' et 'Flux'", expanded=(not cibles.get("Article") or not cibles.get("Flux"))):
-                st.write("Si une colonne importante est affichée comme **Non détectée**, sélectionnez la bonne colonne ci-dessous :")
-                col_sel1, col_sel2 = st.columns(2)
-                
-                options_cols = ["-- Détection automatique --"] + list(df_propre.columns)
-                
-                art_selected = col_sel1.selectbox("Sélectionnez la colonne 'Article' / Code :", options_cols)
-                flux_selected = col_sel2.selectbox("Sélectionnez la colonne 'Flux' / Quantité :", options_cols)
-                
-                override_art = art_selected if art_selected != "-- Détection automatique --" else None
-                override_flux = flux_selected if flux_selected != "-- Détection automatique --" else None
-                
-                # Ré-analyser si ajustement
-                if override_art or override_flux:
-                    fichier_uploade.seek(0)
-                    resultats, df_propre = ls.analyser_fichier(fichier_uploade, override_art, override_flux)
-                    cibles = resultats.get("colonnes_cibles", {})
-
-            st.write("#### Aperçu des données opérationnelles :")
-            mots_prix = ["prix", "montant", "valeur", "unitaire", "cout", "coût", "mnt", "ttc", "ht", "price", "amount"]
-            cols_sans_prix = [c for c in df_propre.columns if not any(mot in str(c).lower() for mot in mots_prix)]
-            st.dataframe(df_propre[cols_sans_prix].head(100), use_container_width=True)
-
-        # ================= 1. ONGLET ACTIVITÉS =================
         with onglet1:
-            st.subheader("Analyse des Activités & Volumes Graphiques")
+            st.subheader("Repartition des Mouvements par Type de Flux (Poids Relatif)")
+            st.write("Analyse des volumes de transactions (Entrees, Sorties, Ajustements) enregistres dans ce fichier.")
             
-            if resultats.get("analyses_textes"):
-                for index, analyse in enumerate(resultats["analyses_textes"]):
-                    df_graph = pd.DataFrame(analyse["donnees"])
-                    if not df_graph.empty and "Valeur" in df_graph.columns:
-                        st.write(f"**{analyse['colonne']}**")
-                        st.bar_chart(data=df_graph, x="Valeur", y="Nombre", color="#4AF0A1")
+            if not repart_flux.empty:
+                repart_flux["pourcentage"] = (repart_flux["nb"] / repart_flux["nb"].sum()) * 100
+                st.bar_chart(data=repart_flux, x="type", y="pourcentage", color="#4AP0A1")
             
-            if resultats.get("analyses_numeriques"):
-                st.markdown("---")
-                st.subheader("Synthèse Quantitative des Flux")
-                for index, analyse in enumerate(resultats["analyses_numeriques"]):
-                    df_num = pd.DataFrame(analyse["donnees"])
-                    if not df_num.empty and "Valeur" in df_num.columns:
-                        st.write(f"**{analyse['colonne']}**")
-                        st.bar_chart(data=df_num, x="Valeur", y="Volume", color="#FF4B4B")
-            
-            if not resultats.get("analyses_textes") and not resultats.get("analyses_numeriques"):
-                st.info("💡 Sélectionnez les colonnes dans l'onglet 'Structure' pour construire les graphiques.")
+            if kpis['periode_debut'] and kpis['periode_fin']:
+                st.info(f"📅 Periode couverte par ce fichier : du {kpis['periode_debut']} au {kpis['periode_fin']}")
 
-        # ================= 3. ONGLET ALERTE =================
-        with onglet3:
-            st.subheader("Centre d'Alerte et de Diagnostic des Risques Logistiques")
+        with onglet2:
+            st.subheader("Classement Proportionnel des Categories (Consommations / Immobilisations)")
+            st.write("Structure des categories les plus sollicitees financierement dans le fichier importé (en %).")
             
-            al = resultats.get("alertes_logistiques", {
-                "negatifs": [], "vides": [], "excessifs": [], "faible_rotation": [], "sorties_sans_entree": []
-            })
-            
-            total_anomalies = len(al["negatifs"]) + len(al["vides"]) + len(al["sorties_sans_entree"]) + len(al["excessifs"]) + len(al["faible_rotation"])
-            
-            if not cibles.get("Article") or not cibles.get("Flux"):
-                st.error("🛑 Impossible de calculer les alertes logistiques. Rendez-vous dans l'onglet **'📋 Structure'** pour indiquer quelles sont les colonnes **Article** et **Flux**.")
-            elif total_anomalies == 0:
-                st.success("✅ Aucun comportement critique ou anomalie de stock détectés.")
-            else:
-                st.warning(f"⚠️ {total_anomalies} anomalies ou points de vigilance détectés sur vos flux.")
+            if not categories.empty:
+                total_val_cat = categories["valeur"].sum()
+                categories["Part_Relative_Pourcent"] = (categories["valeur"] / total_val_cat) * 100
                 
-                if al["negatifs"]:
-                    with st.expander("🛑 ALERTES : Stock cumulé négatif", expanded=True):
-                        st.dataframe(pd.DataFrame(al["negatifs"]), use_container_width=True)
-                        
-                if al["vides"]:
-                    with st.expander("📭 SUIVI : Stock devenu vide", expanded=False):
-                        st.dataframe(pd.DataFrame(al["vides"]), use_container_width=True)
-                        
-                if al["sorties_sans_entree"]:
-                    with st.expander("🚨 ANOMALIE : Sorties sans entrée", expanded=True):
-                        st.dataframe(pd.DataFrame(al["sorties_sans_entree"]), use_container_width=True)
+                col_cat = "Catégorie" if "Catégorie" in categories.columns else "Categorie"
+                st.bar_chart(data=categories.head(5), x=col_cat, y="Part_Relative_Pourcent", color="#FF4B4B")
+            else:
+                st.info("Aucune donnee de montant trouvee pour classer les categories.")
 
-                if al["excessifs"]:
-                    with st.expander("📈 VIGILANCE : Sorties consommations excessives", expanded=False):
-                        st.dataframe(pd.DataFrame(al["excessifs"]), use_container_width=True)
+        with onglet3:
+            st.subheader("Detection Automatique des Dysfonctionnements de Stock")
+            st.write("Regles metier appliquees pour identifier les risques d'exploitation.")
+            
+            # Affichage dynamique des alertes selon le contenu du fichier
+            aucun_incident = True
+            for cle_anomalie, data in anomalies.items():
+                if data["nb"] > 0:
+                    aucun_incident = False
+                    with st.expander(f"🔴 {data['libelle']} : {data['nb']} incident(s) detecte(s)"):
+                        st.error(f"**Description de la regle :** {data['description']}")
+                        st.write("Echantillon des lignes affectees (anonymise) :")
                         
-                if al["faible_rotation"]:
-                    with st.expander("⏳ OPTIMISATION : Rotation très faible", expanded=False):
-                        st.dataframe(pd.DataFrame(al["faible_rotation"]), use_container_width=True)
+                        df_ano_visu = pd.DataFrame(data["lignes"])
+                        if not df_ano_visu.empty:
+                            colonnes_visu = [c for c in ["Date", "Article", "Désignation", "Designation", "Magasin", "Flux"] if c in df_ano_visu.columns]
+                            st.dataframe(df_ano_visu[colonnes_visu])
+            
+            if aucun_incident:
+                st.success(" Félicitations ! Aucune anomalie logistique n'a été détectée dans ce fichier.")
 
     except Exception as e:
-        st.error(f"❌ Impossible d'analyser ce fichier automatiquement : {e}")
+        st.error(f" Une erreur s'est produite lors de l'analyse de ce fichier : {e}")
+
 else:
-    st.info("👋 Module en veille. Veuillez importer un tableau Excel pour initialiser les onglets.")
+    st.info("👋 En attente d'un fichier. Veuillez glisser-deposer un fichier Excel ci-dessus pour lancer l'analyse.")
