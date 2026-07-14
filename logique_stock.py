@@ -2,6 +2,13 @@
 """
 Module de logique métier : lecture du fichier de mouvements de stock,
 calcul des indicateurs de pilotage et détection des anomalies.
+
+Conçu pour le format réel transmis par le service (export ERP à plat, une ligne par
+mouvement, colonne "Type de flux de mouvement" identifiant Sorties/Entrées/
+Transfères/Ajustement) — ex. fichier "Mvts_02_2026.xlsx".
+
+Ce module ne dépend d'aucun framework web : il est importé tel quel par le backend
+Flask (app.py) et peut aussi être utilisé en ligne de commande / notebook.
 """
 
 import re
@@ -13,7 +20,8 @@ import pandas as pd
 
 
 # ============================================================================
-# Détection souple des colonnes
+# Détection souple des colonnes (au cas où les libellés varient légèrement
+# d'un mois à l'autre dans l'export ERP)
 # ============================================================================
 
 def _normaliser(texte):
@@ -23,19 +31,21 @@ def _normaliser(texte):
 
 
 CANDIDATS_COLONNES = {
-    "date": ["date du mouvement", "datem", "date mouvement", "date", "dt_mvt", "date_mvt"],
-    "article": ["article", "code article", "code_article", "ref", "référence", "reference", "code"],
-    "designation": ["version", "designation", "désignation", "libelle", "libellé", "description"],
-    "categorie": ["descr_section", "categorie", "catégorie", "section", "famille", "groupe"],
-    "quantite": ["qte", "quantite", "quantité", "qte_mvt", "volume", "nombre"],
-    "pmp": ["pmp", "pu", "prix unitaire", "cout unitaire"],
-    "montant": ["mnt", "montant", "valeur du mouvement", "valeur", "total", "montant_mvt"],
-    "magasin": ["magasin", "depot", "dépôt", "emplacement", "site", "entrepot"],
-    "type_flux": ["type de flux de mouvement", "type de flux", "flux", "sens", "type mvt", "mouvement"],
+    "date": ["date du mouvement", "datem", "date mouvement"],
+    "article": ["article"],
+    "designation": ["version", "designation", "libelle"],
+    "categorie": ["descr_section", "categorie", "section"],
+    "quantite": ["qte", "quantite"],
+    "pmp": ["pmp"],
+    "montant": ["mnt", "montant", "valeur du mouvement"],
+    "magasin": ["magasin"],
+    "type_flux": ["type de flux de mouvement", "type de flux"],
     "type_detail": ["type"],
-    "origine": ["type d'origine du mouvement", "origine du mouvement", "reference", "num_doc"],
+    "origine": ["type d'origine du mouvement", "origine du mouvement", "reference"],
 }
 
+# Colonnes à exclure des correspondances "partielles" trop larges (ex: "Type" seul
+# ne doit pas capter "Type de flux de mouvement" ni "Type d'origine du mouvement").
 COLONNES_EXACTES_UNIQUEMENT = {"type_detail"}
 
 
@@ -63,27 +73,18 @@ def detecter_mapping(colonnes):
 
 
 def choisir_feuille(chemin_fichier):
-    """
-    Parcourt toutes les feuilles et inspecte les 10 premières lignes 
-    pour détecter la vraie ligne d'en-tête du tableau.
-    """
+    """Choisit, parmi les feuilles du classeur, celle qui contient une colonne de
+    type de flux de mouvement (la feuille de données ; les autres feuilles éventuelles
+    — sommaires, feuilles vides — sont ignorées)."""
     xl = pd.ExcelFile(chemin_fichier)
-    
     for nom in xl.sheet_names:
-        # Lire les 10 premières lignes pour trouver où commence le tableau
-        df_head = pd.read_excel(chemin_fichier, sheet_name=nom, nrows=10, header=None)
-        
-        for idx, row in df_head.iterrows():
-            colonnes_potentielles = row.dropna().astype(str).tolist()
-            mapping = detecter_mapping(colonnes_potentielles)
-            
-            # Condition de détection : article présent + quantité ou flux
-            if mapping["article"] and (mapping["quantite"] or mapping["type_flux"]):
-                return nom, idx
-                
+        entete = pd.read_excel(chemin_fichier, sheet_name=nom, nrows=0).columns
+        mapping = detecter_mapping(entete)
+        if mapping["type_flux"] and mapping["article"] and mapping["quantite"]:
+            return nom, mapping
     raise ValueError(
         "Aucune feuille du classeur ne contient les colonnes attendues "
-        "(Article, Qté, Type de flux de mouvement, ...). Veuillez vérifier le fichier."
+        "(Article, Qté, Type de flux de mouvement, ...)."
     )
 
 
@@ -118,15 +119,17 @@ def parser_date_erp(valeur):
 # ============================================================================
 
 def charger_mouvements(chemin_fichier):
+    """Charge le classeur, détecte la feuille et les colonnes pertinentes, et retourne
+    un DataFrame normalisé (schéma stable quel que soit le fichier source) ainsi que
+    la liste des avertissements rencontrés."""
     avertissements = []
-    nom_feuille, header_line = choisir_feuille(chemin_fichier)
-    
-    # Lecture avec la ligne d'en-tête correctement positionnée
-    df = pd.read_excel(chemin_fichier, sheet_name=nom_feuille, header=header_line)
+    nom_feuille, mapping = choisir_feuille(chemin_fichier)
+    df = pd.read_excel(chemin_fichier, sheet_name=nom_feuille)
     df.columns = [str(c).strip() for c in df.columns]
+    # re-détecter sur les colonnes réelles (au cas où les strip changent la correspondance)
     mapping = detecter_mapping(df.columns)
 
-    manquants_requis = [c for c in ("article", "quantite") if not mapping[c]]
+    manquants_requis = [c for c in ("article", "quantite", "type_flux") if not mapping[c]]
     if manquants_requis:
         raise ValueError(f"Colonnes requises introuvables : {manquants_requis}")
 
@@ -139,15 +142,11 @@ def charger_mouvements(chemin_fichier):
     d["Montant"] = pd.to_numeric(df[mapping["montant"]], errors="coerce").fillna(0.0) if mapping["montant"] else 0.0
     d["Magasin"] = df[mapping["magasin"]].astype(str).str.strip().replace("nan", "(sans magasin)") if mapping["magasin"] else "(sans magasin)"
     d["Magasin"] = d["Magasin"].replace("", "(sans magasin)")
-    
-    if mapping["type_flux"]:
-        d["TypeFlux"] = df[mapping["type_flux"]].astype(str).str.strip()
-    else:
-        d["TypeFlux"] = "Non défini"
-
+    d["TypeFlux"] = df[mapping["type_flux"]].astype(str).str.strip()
     d["NatureConso"] = df[mapping["type_detail"]].astype(str).str.strip() if mapping["type_detail"] else ""
     d["DateM"] = df[mapping["date"]].apply(parser_date_erp) if mapping["date"] else pd.NaT
 
+    # normalisation des libellés de flux (ex: "Transfères"/"Transferts" -> "Transferts")
     def _norm_flux(v):
         n = _normaliser(v)
         if "sortie" in n:
@@ -221,12 +220,16 @@ def categories_plus_couteuses(df, n=10):
 
 
 def tendance_mensuelle(df):
+    """Tendance par semaine calendaire (le mot 'mensuelle' du cahier des charges
+    correspond, sur un export d'un seul mois, à un suivi infra-mensuel par semaine)."""
     d = df.dropna(subset=["DateM"]).copy()
     if d.empty:
         return []
     d["Semaine"] = d["DateM"].dt.to_period("W").apply(lambda p: p.start_time.strftime("%d/%m"))
     d["MontantSigne"] = d["Montant"].abs() * np.sign(d["Qté"])
     g = d.groupby("Semaine").agg(nb=("DateM", "count"), valeur_nette=("MontantSigne", "sum")).reset_index()
+    g["ordre"] = pd.to_datetime(g["Semaine"] + "/2026", format="%d/%m/%Y", errors="coerce")
+    g = g.sort_values("ordre").drop(columns="ordre")
     return g.to_dict("records")
 
 
@@ -243,10 +246,11 @@ def calculer_indicateurs(df):
 
 
 # ============================================================================
-# Détection des anomalies
+# Détection des anomalies (6 règles + rupture de stock)
 # ============================================================================
 
 def _lignes_dict(df):
+    """Sérialise un sous-ensemble de lignes pour la réponse JSON / l'export."""
     cols = ["DateM", "Article", "Désignation", "Magasin", "TypeFlux", "Qté", "Montant"]
     out = df[cols].copy()
     out["DateM"] = out["DateM"].apply(lambda d: d.strftime("%d/%m/%Y %H:%M") if pd.notna(d) else "")
@@ -255,6 +259,8 @@ def _lignes_dict(df):
 
 
 def calculer_stock_cumule(df):
+    """Stock théorique cumulé par article, base 0 en début de période (aucun stock
+    d'ouverture n'est fourni dans ce fichier)."""
     d = df.sort_values(["Article", "DateM"], na_position="first").copy()
     d["StockCumule"] = d.groupby("Article")["Qté"].cumsum()
     d["StockAvant"] = d["StockCumule"] - d["Qté"]
@@ -266,6 +272,8 @@ def detect_stock_negatif(df_stock):
 
 
 def detect_rupture_stock(df_stock):
+    """Mouvements après lesquels le stock cumulé de l'article retombe exactement à 0
+    (rupture / stock devenu vide), alors qu'il était positif juste avant."""
     return df_stock[(df_stock["StockCumule"] == 0) & (df_stock["StockAvant"] > 0)]
 
 
@@ -342,6 +350,7 @@ def calculer_anomalies(df, seuil_z=3.0, seuil_ajust=2):
 
 
 def analyser_fichier(chemin_fichier, seuil_z=3.0, seuil_ajust=2):
+    """Point d'entrée unique utilisé par le backend Flask."""
     df, avertissements = charger_mouvements(chemin_fichier)
     indicateurs = calculer_indicateurs(df)
     anomalies_json, anomalies_df = calculer_anomalies(df, seuil_z, seuil_ajust)
