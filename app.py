@@ -7,7 +7,7 @@ import plotly.express as px  # Pour les diagrammes circulaires et avancés
 # 1. Configuration initiale de la page Streamlit
 st.set_page_config(page_title="Dashboard Stocks CMG", layout="wide")
 
-st.title("📊 Système d'Analyse Universel des Stocks - CMG")
+st.title("📊 Système d'Analyse Universel des Stocks ")
 st.markdown("### *Outil d'aide à la décision par Chargement de Fichier (Anonymisé)*")
 st.write("Ce site web utilise votre moteur algorithmique pour nettoyer, analyser et détecter les anomalies de n'importe quel export de mouvements de stock.")
 
@@ -37,19 +37,19 @@ if fichier_uploade is not None:
         anomalies = resultats_json["anomalies"]
 
         # Affichage des KPIs Généraux
-        st.success("✅ Analyse réussie ! Voici les indicateurs généraux du fichier importé :")
+        st.success(" Analyse réussie ! Voici les indicateurs généraux du fichier importé :")
         col1, col2, col3 = st.columns(3)
-        col1.metric("📦 Nombre total de mouvements", f"{kpis['nb_mouvements']:,}")
-        col2.metric("🔢 Articles différents mouvementés", f"{kpis['nb_articles']}")
-        col3.metric("🏠 Nombre de magasins actifs", f"{kpis['nb_magasins']}")
+        col1.metric(" Nombre total de mouvements", f"{kpis['nb_mouvements']:,}")
+        col2.metric(" Articles différents mouvementés", f"{kpis['nb_articles']}")
+        col3.metric(" Nombre de magasins actifs", f"{kpis['nb_magasins']}")
 
         st.markdown("---")
 
         # 3. Création des Onglets principaux du Dashboard
         onglet1, onglet2, onglet3 = st.tabs([
-            "📈 Activité & Volumes de Flux", 
-            "🔮 Structure Analytique (Pareto/ABC)", 
-            "⚠️ Alertes & Anomalies Logistiques"
+            " Activité & Volumes de Flux", 
+            " Structure Analytique (Pareto/ABC)", 
+            " Alertes & Anomalies Logistiques"
         ])
 
         # --- ONGLET 1 : ACTIVITÉ & VOLUMES DE FLUX ---
@@ -170,7 +170,7 @@ if fichier_uploade is not None:
                     else:
                         nouveau_nom = libelle_original if libelle_original else cle_anomalie
                     
-                    with st.expander(f"🔴 {nouveau_nom} : {data['nb']} incident(s) détecté(s)"):
+                    with st.expander(f" {nouveau_nom} : {data['nb']} incident(s) détecté(s)"):
                         st.error(f"**Description de la règle :** {data['description']}")
                         st.write("Échantillon des lignes affectées (anonymisé) :")
                         
@@ -180,10 +180,10 @@ if fichier_uploade is not None:
                             st.dataframe(df_ano_visu[colonnes_visu])
             
             if aucun_incident:
-                st.success("🎉 Félicitations ! Aucune anomalie logistique n'a été détectée dans ce fichier.")
+                st.success(" Félicitations ! Aucune anomalie logistique n'a été détectée dans ce fichier.")
 
     except Exception as e:
-        st.error(f"❌ Une erreur s'est produite lors de l'analyse de ce fichier : {e}")
+        st.error(f" Une erreur s'est produite lors de l'analyse de ce fichier : {e}")
 
 else:
-    st.info("👋 En attente d'un fichier. Veuillez glisser-déposer un fichier Excel ci-dessus pour lancer l'analyse.")
+    st.info(" En attente d'un fichier. Veuillez glisser-déposer un fichier Excel ci-dessus pour lancer l'analyse.")
