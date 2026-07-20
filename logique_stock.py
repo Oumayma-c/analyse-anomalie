@@ -101,7 +101,6 @@ def charger_mouvements(chemin_fichier):
     xl = pd.ExcelFile(chemin_fichier)
     toutes_feuilles = xl.sheet_names
 
-    # Définition des mots-clés pour repérer les feuilles de mouvements réels séparées
     mappage_feuilles = {
         "entree": "Entrées",
         "sortie": "Sorties",
@@ -112,7 +111,6 @@ def charger_mouvements(chemin_fichier):
     dfs_a_combiner = []
     onglets_mouvements_trouves = False
 
-    # 1. Tenter de chercher si le fichier contient des onglets séparés (Entrées, Sorties, etc.)
     for nom_f in toutes_feuilles:
         nom_normalise = _normaliser(nom_f)
         type_flux_detecte = None
@@ -151,15 +149,12 @@ def charger_mouvements(chemin_fichier):
 
                 dfs_a_combiner.append(d_sub)
 
-    # 2. Si aucun onglet de mouvement spécifique n'a été trouvé, on scanne TOUS les onglets
-    #    pour trouver le premier onglet valide contenant "Article" et "Quantité".
     if not onglets_mouvements_trouves:
         feuille_trouvee = None
         mapping_trouve = None
         
         for nom_f in toutes_feuilles:
             try:
-                # Lecture des premières lignes pour inspecter les colonnes
                 df_test = pd.read_excel(chemin_fichier, sheet_name=nom_f, nrows=5)
                 df_test.columns = [str(c).strip() for c in df_test.columns]
                 m = detecter_mapping(df_test.columns)
@@ -175,7 +170,6 @@ def charger_mouvements(chemin_fichier):
                 "Aucun onglet contenant les colonnes requises (Article et Quantité) n'a été trouvé dans ce fichier."
             )
 
-        # Charger les données de la feuille identifiée
         df_temp = pd.read_excel(chemin_fichier, sheet_name=feuille_trouvee)
         df_temp.columns = [str(c).strip() for c in df_temp.columns]
         mapping = mapping_trouve
@@ -265,6 +259,29 @@ def categories_plus_couteuses(df, n=10):
     return g.to_dict("records")
 
 
+def evolution_categories_mensuelle(df, n=10):
+    df_temp = df.dropna(subset=["DateM"]).copy()
+    if df_temp.empty:
+        return []
+    
+    # Création de l'axe temporel standardisé YYYY-MM
+    df_temp["Mois"] = df_temp["DateM"].dt.strftime("%Y-%m")
+    df_temp["AbsMontant"] = df_temp["Montant"].abs()
+    
+    # Isolation des familles principales pour ne pas saturer l'affichage
+    top_cats = df_temp.groupby("Catégorie")["AbsMontant"].sum().nlargest(n).index
+    df_filtered = df_temp[df_temp["Catégorie"].isin(top_cats)]
+    
+    # Agrégation croisée
+    g = df_filtered.groupby(["Mois", "Catégorie"])["AbsMontant"].sum().reset_index()
+    
+    # Label propre pour l'affichage final (ex: "05/2026")
+    g["Mois_Affichage"] = g["Mois"].apply(lambda x: datetime.strptime(x, "%Y-%m").strftime("%m/%Y"))
+    g = g.sort_values("Mois")
+    
+    return g.to_dict("records")
+
+
 def tendance_mensuelle(df):
     d = df.dropna(subset=["DateM"]).copy()
     if d.empty:
@@ -286,6 +303,7 @@ def calculer_indicateurs(df):
         "top_articles_valeur": top_articles_valeur(df),
         "categories_couteuses": categories_plus_couteuses(df),
         "tendance": tendance_mensuelle(df),
+        "evolution_categories": evolution_categories_mensuelle(df), # Inclus pour l'onglet dynamique
     }
 
 
@@ -295,7 +313,6 @@ def calculer_indicateurs(df):
 
 def _lignes_dict(df):
     cols = ["DateM", "Article", "Désignation", "Magasin", "TypeFlux", "Qté", "Montant"]
-    # S'assurer que les colonnes existent
     for c in cols:
         if c not in df.columns:
             df[c] = ""
