@@ -7,7 +7,7 @@ import plotly.express as px  # Pour les diagrammes circulaires et avancés
 # 1. Configuration initiale de la page Streamlit
 st.set_page_config(page_title="Dashboard Stocks CMG", layout="wide")
 
-st.title("📊 Système d'Analyse Universel des Stocks ")
+st.title(" Système d'Analyse Universel des Stocks ")
 st.markdown("### *Outil d'aide à la décision par Chargement de Fichier (Anonymisé)*")
 st.write("Ce site web utilise votre moteur algorithmique pour nettoyer, analyser et détecter les anomalies de n'importe quel export de mouvements de stock.")
 
